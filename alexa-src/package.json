@@ -1,0 +1,23 @@
+{
+  "name": "alexa-ksp",
+  "version": "1.0.0",
+  "description": "HackSurrey 3.0 - Control KSP from your Alexa",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattreid1/HackSurrey3.0-Alexa-KSP.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mattreid1/HackSurrey3.0-Alexa-KSP/issues"
+  },
+  "homepage": "https://github.com/mattreid1/HackSurrey3.0-Alexa-KSP#readme",
+  "dependencies": {
+    "alexa-app": "^4.2.3",
+    "express": "^4.17.1"
+  }
+}
