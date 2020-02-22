@@ -2,7 +2,7 @@ const express = require("express");
 const Alexa = require("alexa-app");
 const PORT = process.env.port || 8080;
 const express_app = express();
-const app = new Alexa.app("kerbal");
+const app = new Alexa.app("k. s. p.");
 
 app.express({
 	expressApp: express_app,
@@ -16,6 +16,7 @@ app.intent("sayNumber", {
 },
 	function (request, response) {
 		var number = request.slot("number");
+		console.log(`A used said the number ${number}`);
 		response.say("You asked for the number " + number);
 	}
 );
