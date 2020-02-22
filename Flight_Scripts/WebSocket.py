@@ -1,18 +1,224 @@
+import math
+import time
 import krpc
 import websocket
-
-def on_message(ws, message):
-	print(message)
-	global vessel
-	for x in range(0, 10):
-		print("T-" + str(10 - x))
-	vessel.control.throttle = 1
-	vessel.control.activate_next_stage()
-	vessel.auto_pilot.engage()
-	vessel.auto_pilot.target_pitch_and_heading(90, 90)
 
 conn = krpc.connect(name='FlightComputer', address='127.0.0.1', rpc_port=50000, stream_port=50001)
 vessel = conn.space_center.active_vessel
 
-ws = websocket.WebSocketApp("ws://35.242.157.185/", on_message = on_message)
-ws.run_forever()
+start_gravity_turn = 0
+end_gravity_turn = 0
+ut = None
+altitude = None
+apoapsis = None
+periapsis = None
+
+def prelaunch(sGT=250, eGT=45000):
+	global vessel
+	global conn
+	global ut
+	global altitude
+	global apoapsis
+	global periapsis
+	global start_gravity_turn
+	global end_gravity_turn
+
+	vessel = conn.space_center.active_vessel
+	start_gravity_turn = sGT
+	end_gravity_turn = eGT
+	ut = conn.add_stream(getattr, conn.space_center, 'ut')
+	altitude = conn.add_stream(getattr, vessel.flight(), 'mean_altitude')
+	apoapsis = conn.add_stream(getattr, vessel.orbit, 'apoapsis_altitude')
+	periapsis = conn.add_stream(getattr, vessel.orbit, 'periapsis_altitude')
+	vessel.control.sas = False
+	vessel.control.rcs = True
+	vessel.control.throttle = 1.0
+
+def circularize_burn(at_apoapsis): # True = apoapsis, False = periapsis
+	print('Planning circularization burn')
+	mu = vessel.orbit.body.gravitational_parameter
+	r = vessel.orbit.apoapsis
+	a1 = vessel.orbit.semi_major_axis
+	a2 = r
+	v1 = math.sqrt(mu * ((2. / r) - (1. / a1)))
+	v2 = math.sqrt(mu * ((2. / r) - (1. / a2)))
+	delta_v = v2 - v1
+	node = vessel.control.add_node(
+		ut() + vessel.orbit.time_to_apoapsis, prograde=delta_v)
+
+	# Calculate burn time (using rocket equation)
+	F = vessel.available_thrust
+	Isp = vessel.specific_impulse * 9.82
+	m0 = vessel.mass
+	m1 = m0 / math.exp(delta_v / Isp)
+	flow_rate = F / Isp
+	burn_time = (m0 - m1) / flow_rate
+	# Orientate ship
+	print('Orientating ship for circularization burn')
+	vessel.control.rcs = False
+	vessel.auto_pilot.reference_frame = node.reference_frame
+	vessel.auto_pilot.target_direction = (0, 1, 0)
+	vessel.auto_pilot.wait()
+
+	# Wait until burn
+	print('Waiting until circularization burn')
+	burn_ut = ut() + vessel.orbit.time_to_apoapsis - (burn_time / 2.)
+	lead_time = 5
+	conn.space_center.warp_to(burn_ut - lead_time)
+	# Execute burn
+	print('Ready to execute burn')
+	time_to_apoapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_apoapsis')
+	while time_to_apoapsis() - (burn_time / 2.) > 0:
+		pass
+	print('Executing burn')
+	vessel.control.throttle = 1.0
+	time.sleep(burn_time - 0.1)
+	print('Fine tuning')
+	vessel.control.throttle = 0.05
+	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+	while remaining_burn()[1] > 2.0:
+		pass
+	vessel.control.throttle = 0.0
+	node.remove()
+
+	print('Launch complete')
+
+
+# def orbit(desired_alt):
+# 	launch()
+# 	global srb_motors
+# 	global start_gravity_turn
+# 	global end_gravity_turn
+# 	turn_angle = 0
+# 	print("Setting orbit to " + str(desired_alt))
+# 	while True:
+# 		if altitude() > start_gravity_turn and altitude() < end_gravity_turn:
+# 			frac = ((altitude() - start_gravity_turn) /
+# 					(end_gravity_turn - start_gravity_turn))
+# 			new_turn_angle = frac * 90
+# 			if abs(new_turn_angle - turn_angle) > 0.5:
+# 				print('Setting angle ' + str(abs(90 - turn_angle)))
+# 				turn_angle = new_turn_angle
+# 				vessel.auto_pilot.target_pitch_and_heading(90 - turn_angle, 90)
+# 			if (srb_motors and srb_fuel() < 0.1) or (stage > 2 and liq_fuel() < 0.1):
+# 				srb_motors=False
+# 				vessel.control.activate_next_stage()
+# 				next_stage()
+# 				print('Stage Separation')
+# 		if apoapsis() > desired_alt * 0.9:
+# 			print("Target hit")
+# 			break
+# 	vessel.control.throttle = 0.25
+# 	while apoapsis() < desired_alt:
+# 		pass
+# 	print('Target apoapsis reached')
+# 	vessel.control.throttle = 0.0
+
+# 	# Wait until out of atmosphere
+# 	print('Coasting out of atmosphere')
+# 	while altitude() < 70500:
+# 		pass
+# 	circularize_burn()
+
+def current_stage():
+	return vessel.control.current_stage - 1
+
+def stage_resources():
+	return vessel.resources_in_decouple_stage(current_stage()).names
+
+def stage():
+	return vessel.control.activate_next_stage()
+
+def liquid_fuel():
+	return vessel.resources_in_decouple_stage(current_stage()).amount("LiquidFuel")
+
+def solid_fuel():
+	return vessel.resources_in_decouple_stage(current_stage()).amount("SolidFuel")
+
+def liftoff():
+	prelaunch()
+	vessel.control.throttle = 1
+	stage()
+	vessel.auto_pilot.engage()
+	vessel.auto_pilot.target_pitch_and_heading(90, 90)
+
+def set_to(desired_alt):
+	if (vessel.flight.speed > 1): # In flight
+		if (desired_alt < apoapsis):
+			# Fly to apoapsis
+			# Burn retrograde until periapsis == desired_alt
+			# Circularise at periapsis
+			burn_ut = ut() + vessel.orbit.time_to_apoapsis - (burn_time / 2.)
+			lead_time = 5
+			conn.space_center.warp_to(burn_ut - lead_time)
+			pass
+		else:
+			# Fly to periapsis
+			# Burn prograde until apoapsis == desired_alt
+			# Circularise at apoapsis
+			pass
+
+def launch_to(desired_alt):
+	liftoff()
+	turn_angle = 0
+	while True:
+		if "LiquidFuel" in stage_resources():
+			if (liquid_fuel() == 0):
+				stage()
+		
+		if "SolidFuel" in stage_resources():
+			if (solid_fuel() == 0):
+				stage()
+
+		if altitude() > start_gravity_turn and altitude() < end_gravity_turn:
+			frac = ((altitude() - start_gravity_turn) /
+					(end_gravity_turn - start_gravity_turn))
+			new_turn_angle = frac * 90
+			if abs(new_turn_angle - turn_angle) > 0.5:
+				print('Setting angle ' + str(abs(90 - turn_angle)))
+				turn_angle = new_turn_angle
+				vessel.auto_pilot.target_pitch_and_heading(90 - turn_angle, 90)
+		if apoapsis() > desired_alt * 0.9:
+			print("Target hit")
+			break
+	
+	vessel.control.throttle = 0.25
+	while apoapsis() < desired_alt:
+		if "LiquidFuel" in stage_resources():
+			if (liquid_fuel() == 0):
+				stage()
+		
+		if "SolidFuel" in stage_resources():
+			if (solid_fuel() == 0):
+				stage()
+		pass
+	print('Target apoapsis reached')
+	vessel.control.throttle = 0.0
+
+	# Wait until out of atmosphere
+	print('Coasting out of atmosphere')
+	while altitude() < 70500:
+		pass
+	circularize_burn()
+
+
+def on_message(ws, message):
+	print(message)
+	command = message.split(",")[0]
+	if (command == "launch"):
+		launch_to(int(message.split(",")[1]))
+	elif (command == "circularise"):
+		circularize_burn()
+
+def on_open(ws):
+	print("Connected to server!")
+
+def on_close(ws):
+	print("Server connection lost!\nReconnecting...")
+
+ws = websocket.WebSocketApp("ws://35.242.157.185/", on_message = on_message, on_close = on_close, on_open = on_open)
+while True:
+    try:
+       ws.run_forever()
+    except:
+        pass
