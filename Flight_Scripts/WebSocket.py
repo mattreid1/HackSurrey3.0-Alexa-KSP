@@ -427,16 +427,6 @@ def lower_mun_orbit():
 	circularize_burn_periapsis(True)
 	print("Welcome to the Mün!")
 
-def deorbit():
-	set_periapsis(0)
-	vessel.control.throttle = 0.1
-	time.sleep(0.5)
-	vessel.control.throttle = 0.0
-
-
-def land_on_mun():
-	deorbit()
-
 prelaunch()
 
 def on_message(ws, message):
@@ -453,6 +443,8 @@ def on_message(ws, message):
 		set_periapsis(int(message.split(",")[1]))
 	elif (command == "muntransfer"):
 		mun_transfer()
+	elif (command == "abort"):
+		vessel.control.abort = True
 	elif (command == "execute069"):
 		vessel.control.throttle = 0.3
 		vessel.control.rcs = True
