@@ -72,12 +72,14 @@ def circularize_burn(rcs = False): # Circularises at apoapsis
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 3)
+	end_time = ut() + burn_time
+	while (end_time - 1) > ut():
+		checkFuel()
 	print('Fine tuning')
 	vessel.control.throttle = 0.05
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
-	while remaining_burn()[1] > 2.0:
-		pass
+	while remaining_burn()[1] > 2.0: # 2m/s
+		checkFuel()
 	vessel.control.throttle = 0.0
 	node.remove()
 
@@ -119,12 +121,14 @@ def circularize_burn_periapsis(rcs = False):
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 3)
+	end_time = ut() + burn_time
+	while (end_time - 1) > ut():
+		checkFuel()
 	print('Fine tuning')
 	vessel.control.throttle = 0.05
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
 	while remaining_burn()[1] > 2.0:
-		pass
+		checkFuel()
 	vessel.control.throttle = 0.0
 	node.remove()
 
@@ -154,6 +158,15 @@ def hohmann_elliptical(r1, r2):
 
 def hohmann_circular(r1, r2):
 	return math.sqrt(vessel.orbit.body.gravitational_parameter/r2) * (1 - math.sqrt((2*r1)/(r1+r2)))
+
+def checkFuel():
+	if "LiquidFuel" in stage_resources():
+		if (liquid_fuel() <= 0.1):
+			stage()
+	
+	if "SolidFuel" in stage_resources():
+		if (solid_fuel() <= 0.1):
+			stage()
 
 def set_apoapsis(desired_alt, rcs=False):
 	mu = vessel.orbit.body.gravitational_parameter
@@ -186,7 +199,9 @@ def set_apoapsis(desired_alt, rcs=False):
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 0.1)
+	end_time = ut() + burn_time
+	while (end_time - 1) > ut():
+		checkFuel()
 	print('Fine tuning')
 	vessel.control.throttle = 0.05
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
@@ -227,7 +242,9 @@ def set_periapsis(desired_alt, rcs=False):
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 0.1)
+	end_time = ut() + burn_time
+	while (end_time - 1) > ut():
+		checkFuel()
 	print('Fine tuning')
 	vessel.control.throttle = 0.05
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
@@ -240,14 +257,7 @@ def launch_to(desired_alt):
 	liftoff()
 	turn_angle = 0
 	while True:
-		if "LiquidFuel" in stage_resources():
-			if (liquid_fuel() == 0):
-				stage()
-		
-		if "SolidFuel" in stage_resources():
-			if (solid_fuel() == 0):
-				stage()
-
+		checkFuel()
 		if altitude() > start_gravity_turn and altitude() < end_gravity_turn:
 			frac = ((altitude() - start_gravity_turn) /
 					(end_gravity_turn - start_gravity_turn))
@@ -262,14 +272,8 @@ def launch_to(desired_alt):
 	
 	vessel.control.throttle = 0.25
 	while apoapsis() < desired_alt:
-		if "LiquidFuel" in stage_resources():
-			if (liquid_fuel() == 0):
-				stage()
-		
-		if "SolidFuel" in stage_resources():
-			if (solid_fuel() == 0):
-				stage()
-		pass
+		checkFuel()
+
 	print('Target apoapsis reached')
 	vessel.control.throttle = 0.0
 
@@ -356,6 +360,7 @@ def mun_transfer():
 		a = vessel.orbit.semi_major_axis
 		actual_delta_v = (mu * ((2 / r) - (1 / a))) ** (1 / 2) - v1
 		print("DeltaV so far: ", actual_delta_v, "out of needed", delta_v)
+		checkFuel()
 	vessel.control.throttle = 0
 	vessel.auto_pilot.disengage()
 	print("Burn complete")
@@ -383,7 +388,7 @@ def cir_moon():
 	flow_rate = F / Isp
 	burn_time = abs((m0 - m1) / flow_rate)
 	# Orientate ship
-	print('Orientating ship for Munar circularisation burn')
+	print('Orientating ship for Munar capture burn')
 	vessel.control.rcs = True
 	vessel.auto_pilot.engage()
 	vessel.auto_pilot.reference_frame = node.reference_frame
@@ -391,7 +396,7 @@ def cir_moon():
 	vessel.auto_pilot.wait()
 
 	# Wait until burn
-	print('Waiting until Munar circularisation burn')
+	print('Waiting until Munar capture burn')
 	burn_ut = nodeTime - (burn_time / 2.)
 	lead_time = 5
 	conn.space_center.warp_to(burn_ut - lead_time)
@@ -402,12 +407,14 @@ def cir_moon():
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 10)
+	end_time = ut() + burn_time
+	while (end_time - 10) > ut():
+		checkFuel()
 	print('Fine tuning')
-	vessel.control.throttle = 0.05
+	vessel.control.throttle = 0.1
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
 	while remaining_burn()[1] > 10.0:
-		pass
+		checkFuel()
 	vessel.control.throttle = 0.0
 	node.remove()
 	lower_mun_orbit()
@@ -418,6 +425,7 @@ def lower_mun_orbit():
 	vessel.auto_pilot.engage()
 	set_periapsis(30000, True)
 	circularize_burn_periapsis(True)
+	print("Welcome to the Mün!")
 
 def deorbit():
 	set_periapsis(0)
@@ -444,7 +452,7 @@ def on_message(ws, message):
 	elif (command == "setperiapsis"):
 		set_periapsis(int(message.split(",")[1]))
 	elif (command == "muntransfer"):
-		lower_mun_orbit()
+		mun_transfer()
 	elif (command == "execute069"):
 		vessel.control.throttle = 0.3
 		vessel.control.rcs = True
