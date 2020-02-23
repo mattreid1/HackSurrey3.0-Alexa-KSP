@@ -32,9 +32,9 @@ def prelaunch(sGT=250, eGT=45000):
 	periapsis = conn.add_stream(getattr, vessel.orbit, 'periapsis_altitude')
 	vessel.control.sas = False
 	vessel.control.rcs = True
-	vessel.control.throttle = 1.0
+	vessel.control.throttle = 0
 
-def circularize_burn(at_apoapsis): # True = apoapsis, False = periapsis
+def circularize_burn(): # Circularises at apoapsis
 	print('Planning circularization burn')
 	mu = vessel.orbit.body.gravitational_parameter
 	r = vessel.orbit.apoapsis
@@ -83,43 +83,6 @@ def circularize_burn(at_apoapsis): # True = apoapsis, False = periapsis
 
 	print('Launch complete')
 
-
-# def orbit(desired_alt):
-# 	launch()
-# 	global srb_motors
-# 	global start_gravity_turn
-# 	global end_gravity_turn
-# 	turn_angle = 0
-# 	print("Setting orbit to " + str(desired_alt))
-# 	while True:
-# 		if altitude() > start_gravity_turn and altitude() < end_gravity_turn:
-# 			frac = ((altitude() - start_gravity_turn) /
-# 					(end_gravity_turn - start_gravity_turn))
-# 			new_turn_angle = frac * 90
-# 			if abs(new_turn_angle - turn_angle) > 0.5:
-# 				print('Setting angle ' + str(abs(90 - turn_angle)))
-# 				turn_angle = new_turn_angle
-# 				vessel.auto_pilot.target_pitch_and_heading(90 - turn_angle, 90)
-# 			if (srb_motors and srb_fuel() < 0.1) or (stage > 2 and liq_fuel() < 0.1):
-# 				srb_motors=False
-# 				vessel.control.activate_next_stage()
-# 				next_stage()
-# 				print('Stage Separation')
-# 		if apoapsis() > desired_alt * 0.9:
-# 			print("Target hit")
-# 			break
-# 	vessel.control.throttle = 0.25
-# 	while apoapsis() < desired_alt:
-# 		pass
-# 	print('Target apoapsis reached')
-# 	vessel.control.throttle = 0.0
-
-# 	# Wait until out of atmosphere
-# 	print('Coasting out of atmosphere')
-# 	while altitude() < 70500:
-# 		pass
-# 	circularize_burn()
-
 def current_stage():
 	return vessel.control.current_stage - 1
 
@@ -136,27 +99,102 @@ def solid_fuel():
 	return vessel.resources_in_decouple_stage(current_stage()).amount("SolidFuel")
 
 def liftoff():
-	prelaunch()
 	vessel.control.throttle = 1
 	stage()
 	vessel.auto_pilot.engage()
 	vessel.auto_pilot.target_pitch_and_heading(90, 90)
 
-def set_to(desired_alt):
-	if (vessel.flight.speed > 1): # In flight
-		if (desired_alt < apoapsis):
-			# Fly to apoapsis
-			# Burn retrograde until periapsis == desired_alt
-			# Circularise at periapsis
-			burn_ut = ut() + vessel.orbit.time_to_apoapsis - (burn_time / 2.)
-			lead_time = 5
-			conn.space_center.warp_to(burn_ut - lead_time)
-			pass
-		else:
-			# Fly to periapsis
-			# Burn prograde until apoapsis == desired_alt
-			# Circularise at apoapsis
-			pass
+def hohmann_elliptical(r1, r2):
+	return math.sqrt(vessel.orbit.body.gravitational_parameter/r1) * (math.sqrt((2*r2)/(r1+r2)) - 1)
+
+def hohmann_circular(r1, r2):
+	return math.sqrt(vessel.orbit.body.gravitational_parameter/r2) * (1 - math.sqrt((2*r1)/(r1+r2)))
+
+def set_apoapsis(desired_alt):
+	mu = vessel.orbit.body.gravitational_parameter
+	delta_v = hohmann_elliptical(vessel.orbit.apoapsis, desired_alt + vessel.orbit.body.equatorial_radius)
+	node = vessel.control.add_node(
+		ut() + vessel.orbit.time_to_periapsis, prograde=delta_v)
+	F = vessel.available_thrust
+	Isp = vessel.specific_impulse * 9.82
+	m0 = vessel.mass
+	m1 = m0 / math.exp(abs(delta_v) / Isp)
+	flow_rate = F / Isp
+	burn_time = (m0 - m1) / flow_rate
+
+	# Orientate ship
+	print('Orientating ship for apoapsis change burn')
+	vessel.control.rcs = False
+	vessel.control.throttle = 0
+	vessel.auto_pilot.engage()
+	vessel.auto_pilot.reference_frame = node.reference_frame
+	vessel.auto_pilot.wait()
+
+	# Wait until burn
+	print('Waiting until apoapsis change burn')
+	burn_ut = ut() + vessel.orbit.time_to_periapsis - (burn_time / 2.)
+	lead_time = 5
+	conn.space_center.warp_to(burn_ut - lead_time)
+	# Execute burn
+	print('Ready to execute burn')
+	time_to_periapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_periapsis')
+	while time_to_periapsis() - (burn_time / 2.) > 0:
+		pass
+	print('Executing burn')
+	vessel.control.throttle = 1.0
+	time.sleep(burn_time - 0.1)
+	print('Fine tuning')
+	vessel.control.throttle = 0.05
+	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+	while remaining_burn()[1] > 2.0:
+		pass
+	vessel.control.throttle = 0.0
+	node.remove()
+
+def set_periapsis(desired_alt):
+	mu = vessel.orbit.body.gravitational_parameter
+	circularize_at_apoapsis = True
+	if (desired_alt < apoapsis()):
+		circularize_at_apoapsis = False
+
+	delta_v = hohmann_elliptical(vessel.orbit.periapsis, desired_alt + vessel.orbit.body.equatorial_radius)
+	node = vessel.control.add_node(
+		ut() + vessel.orbit.time_to_apoapsis, prograde=delta_v)
+	F = vessel.available_thrust
+	Isp = vessel.specific_impulse * 9.82
+	m0 = vessel.mass
+	m1 = m0 / math.exp(abs(delta_v) / Isp)
+	flow_rate = F / Isp
+	burn_time = (m0 - m1) / flow_rate
+
+	# Orientate ship
+	print('Orientating ship for periapsis change burn')
+	vessel.control.rcs = False
+	vessel.control.throttle = 0
+	vessel.auto_pilot.engage()
+	vessel.auto_pilot.reference_frame = node.reference_frame
+	vessel.auto_pilot.wait()
+
+	# Wait until burn
+	print('Waiting until periapsis change burn')
+	burn_ut = ut() + vessel.orbit.time_to_apoapsis - (burn_time / 2.)
+	lead_time = 5
+	conn.space_center.warp_to(burn_ut - lead_time)
+	# Execute burn
+	print('Ready to execute burn')
+	time_to_apoapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_apoapsis')
+	while time_to_apoapsis() - (burn_time / 2.) > 0:
+		pass
+	print('Executing burn')
+	vessel.control.throttle = 1.0
+	time.sleep(burn_time - 0.1)
+	print('Fine tuning')
+	vessel.control.throttle = 0.05
+	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+	while remaining_burn()[1] > 2.0:
+		pass
+	vessel.control.throttle = 0.0
+	node.remove()
 
 def launch_to(desired_alt):
 	liftoff()
@@ -201,14 +239,35 @@ def launch_to(desired_alt):
 		pass
 	circularize_burn()
 
+prelaunch()
 
 def on_message(ws, message):
-	print(message)
+	if (message != "ping"):
+		print(message)
 	command = message.split(",")[0]
 	if (command == "launch"):
 		launch_to(int(message.split(",")[1]))
 	elif (command == "circularise"):
 		circularize_burn()
+	elif (command == "setapoapsis"):
+		set_apoapsis(int(message.split(",")[1]))
+	elif (command == "setperiapsis"):
+		set_periapsis(int(message.split(",")[1]))
+	elif (command == "execute069"):
+		vessel.control.throttle = 1
+		vessel.control.rcs = True
+		vessel.control.sas = False
+		vessel.auto_pilot.engage()
+		vessel.auto_pilot.target_pitch_and_heading(90, 270)
+		stage()
+		time.sleep(1)
+		stage()
+		vessel.control.throttle = 0
+		vessel.auto_pilot.target_pitch_and_heading(0, 270)
+		while True:
+			if (vessel.flight().pitch <= 40.0):
+				break
+		vessel.control.throttle = 1
 
 def on_open(ws):
 	print("Connected to server!")
@@ -217,8 +276,4 @@ def on_close(ws):
 	print("Server connection lost!\nReconnecting...")
 
 ws = websocket.WebSocketApp("ws://35.242.157.185/", on_message = on_message, on_close = on_close, on_open = on_open)
-while True:
-    try:
-       ws.run_forever()
-    except:
-        pass
+ws.run_forever()
