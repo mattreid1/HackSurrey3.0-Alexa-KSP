@@ -34,7 +34,7 @@ def prelaunch(sGT=250, eGT=45000):
 	vessel.control.rcs = True
 	vessel.control.throttle = 0
 
-def circularize_burn(): # Circularises at apoapsis
+def circularize_burn(rcs = False): # Circularises at apoapsis
 	print('Planning circularization burn')
 	mu = vessel.orbit.body.gravitational_parameter
 	r = vessel.orbit.apoapsis
@@ -48,14 +48,14 @@ def circularize_burn(): # Circularises at apoapsis
 
 	# Calculate burn time (using rocket equation)
 	F = vessel.available_thrust
-	Isp = vessel.specific_impulse * 9.82
+	Isp = vessel.specific_impulse * vessel.orbit.body.surface_gravity
 	m0 = vessel.mass
 	m1 = m0 / math.exp(delta_v / Isp)
 	flow_rate = F / Isp
-	burn_time = (m0 - m1) / flow_rate
+	burn_time = abs((m0 - m1) / flow_rate)
 	# Orientate ship
 	print('Orientating ship for circularization burn')
-	vessel.control.rcs = False
+	vessel.control.rcs = rcs
 	vessel.auto_pilot.reference_frame = node.reference_frame
 	vessel.auto_pilot.target_direction = (0, 1, 0)
 	vessel.auto_pilot.wait()
@@ -72,7 +72,7 @@ def circularize_burn(): # Circularises at apoapsis
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
-	time.sleep(burn_time - 0.1)
+	time.sleep(burn_time - 3)
 	print('Fine tuning')
 	vessel.control.throttle = 0.05
 	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
@@ -81,7 +81,52 @@ def circularize_burn(): # Circularises at apoapsis
 	vessel.control.throttle = 0.0
 	node.remove()
 
-	print('Launch complete')
+def circularize_burn_periapsis(rcs = False):
+	print('Planning circularization burn')
+	mu = vessel.orbit.body.gravitational_parameter
+	r = vessel.orbit.periapsis
+	a1 = vessel.orbit.semi_major_axis
+	a2 = r
+	v1 = math.sqrt(mu * ((2. / r) - (1. / a1)))
+	v2 = math.sqrt(mu * ((2. / r) - (1. / a2)))
+	delta_v = v2 - v1
+	node = vessel.control.add_node(
+		ut() + vessel.orbit.time_to_periapsis, prograde=delta_v)
+
+	# Calculate burn time (using rocket equation)
+	F = vessel.available_thrust
+	Isp = vessel.specific_impulse * vessel.orbit.body.surface_gravity
+	m0 = vessel.mass
+	m1 = m0 / math.exp(delta_v / Isp)
+	flow_rate = F / Isp
+	burn_time = abs((m0 - m1) / flow_rate)
+	# Orientate ship
+	print('Orientating ship for circularization burn')
+	vessel.control.rcs = rcs
+	vessel.auto_pilot.reference_frame = node.reference_frame
+	vessel.auto_pilot.target_direction = (0, 1, 0)
+	vessel.auto_pilot.wait()
+
+	# Wait until burn
+	print('Waiting until circularization burn')
+	burn_ut = ut() + vessel.orbit.time_to_periapsis - (burn_time / 2.)
+	lead_time = 5
+	conn.space_center.warp_to(burn_ut - lead_time)
+	# Execute burn
+	print('Ready to execute burn')
+	time_to_periapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_periapsis')
+	while time_to_periapsis() - (burn_time / 2.) > 0:
+		pass
+	print('Executing burn')
+	vessel.control.throttle = 1.0
+	time.sleep(burn_time - 3)
+	print('Fine tuning')
+	vessel.control.throttle = 0.05
+	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+	while remaining_burn()[1] > 2.0:
+		pass
+	vessel.control.throttle = 0.0
+	node.remove()
 
 def current_stage():
 	return vessel.control.current_stage - 1
@@ -110,21 +155,21 @@ def hohmann_elliptical(r1, r2):
 def hohmann_circular(r1, r2):
 	return math.sqrt(vessel.orbit.body.gravitational_parameter/r2) * (1 - math.sqrt((2*r1)/(r1+r2)))
 
-def set_apoapsis(desired_alt):
+def set_apoapsis(desired_alt, rcs=False):
 	mu = vessel.orbit.body.gravitational_parameter
 	delta_v = hohmann_elliptical(vessel.orbit.apoapsis, desired_alt + vessel.orbit.body.equatorial_radius)
-	node = vessel.control.add_node(
-		ut() + vessel.orbit.time_to_periapsis, prograde=delta_v)
+	node_time = ut() + vessel.orbit.time_to_periapsis
+	node = vessel.control.add_node(node_time, prograde=delta_v)
 	F = vessel.available_thrust
-	Isp = vessel.specific_impulse * 9.82
+	Isp = vessel.specific_impulse * vessel.orbit.body.surface_gravity
 	m0 = vessel.mass
 	m1 = m0 / math.exp(abs(delta_v) / Isp)
 	flow_rate = F / Isp
-	burn_time = (m0 - m1) / flow_rate
+	burn_time = abs((m0 - m1) / flow_rate)
 
 	# Orientate ship
 	print('Orientating ship for apoapsis change burn')
-	vessel.control.rcs = False
+	vessel.control.rcs = rcs
 	vessel.control.throttle = 0
 	vessel.auto_pilot.engage()
 	vessel.auto_pilot.reference_frame = node.reference_frame
@@ -132,13 +177,12 @@ def set_apoapsis(desired_alt):
 
 	# Wait until burn
 	print('Waiting until apoapsis change burn')
-	burn_ut = ut() + vessel.orbit.time_to_periapsis - (burn_time / 2.)
+	burn_ut = node_time - (burn_time / 2.)
 	lead_time = 5
 	conn.space_center.warp_to(burn_ut - lead_time)
 	# Execute burn
 	print('Ready to execute burn')
-	time_to_periapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_periapsis')
-	while time_to_periapsis() - (burn_time / 2.) > 0:
+	while ut() - (node_time + (burn_time / 2.)) > 0:
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
@@ -151,25 +195,21 @@ def set_apoapsis(desired_alt):
 	vessel.control.throttle = 0.0
 	node.remove()
 
-def set_periapsis(desired_alt):
+def set_periapsis(desired_alt, rcs=False):
 	mu = vessel.orbit.body.gravitational_parameter
-	circularize_at_apoapsis = True
-	if (desired_alt < apoapsis()):
-		circularize_at_apoapsis = False
-
 	delta_v = hohmann_elliptical(vessel.orbit.periapsis, desired_alt + vessel.orbit.body.equatorial_radius)
-	node = vessel.control.add_node(
-		ut() + vessel.orbit.time_to_apoapsis, prograde=delta_v)
+	node_time = ut() + vessel.orbit.time_to_apoapsis
+	node = vessel.control.add_node(node_time, prograde=delta_v)
 	F = vessel.available_thrust
-	Isp = vessel.specific_impulse * 9.82
+	Isp = vessel.specific_impulse * vessel.orbit.body.surface_gravity
 	m0 = vessel.mass
 	m1 = m0 / math.exp(abs(delta_v) / Isp)
 	flow_rate = F / Isp
-	burn_time = (m0 - m1) / flow_rate
+	burn_time = abs((m0 - m1) / flow_rate)
 
 	# Orientate ship
 	print('Orientating ship for periapsis change burn')
-	vessel.control.rcs = False
+	vessel.control.rcs = rcs
 	vessel.control.throttle = 0
 	vessel.auto_pilot.engage()
 	vessel.auto_pilot.reference_frame = node.reference_frame
@@ -177,13 +217,13 @@ def set_periapsis(desired_alt):
 
 	# Wait until burn
 	print('Waiting until periapsis change burn')
-	burn_ut = ut() + vessel.orbit.time_to_apoapsis - (burn_time / 2.)
+	burn_ut = node_time - (burn_time / 2.)
 	lead_time = 5
 	conn.space_center.warp_to(burn_ut - lead_time)
 	# Execute burn
 	print('Ready to execute burn')
 	time_to_apoapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_apoapsis')
-	while time_to_apoapsis() - (burn_time / 2.) > 0:
+	while ut() - (node_time + (burn_time / 2.)) > 0:
 		pass
 	print('Executing burn')
 	vessel.control.throttle = 1.0
@@ -238,103 +278,156 @@ def launch_to(desired_alt):
 	while altitude() < 70500:
 		pass
 	circularize_burn()
+	print("Launch complete!")
 
 def mun_transfer():
-    celestial_body = conn.space_center.bodies["Mun"]
-    destSemiMajor = celestial_body.orbit.semi_major_axis
-    hohmannSemiMajor = destSemiMajor / 2
-    neededPhase = 2 * math.pi * (1 / (2 * (destSemiMajor ** 3 / hohmannSemiMajor ** 3) ** (1 / 2)))
-    optimalPhaseAngle = 180 - neededPhase * 180 / math.pi  # In degrees; for mun, mun should be ahead of vessel
+	print("Starting transfer")
+	vessel.control.toggle_action_group(1)
+	celestial_body = conn.space_center.bodies["Mun"]
+	destSemiMajor = celestial_body.orbit.semi_major_axis
+	hohmannSemiMajor = destSemiMajor / 2
+	neededPhase = 2 * math.pi * (1 / (2 * (destSemiMajor ** 3 / hohmannSemiMajor ** 3) ** (1 / 2)))
+	optimalPhaseAngle = 180 - neededPhase * 180 / math.pi  # In degrees; for mun, mun should be ahead of vessel
 
-    # Get current phase angle
-    phaseAngle = 5040  # Random default value
-    vessel.auto_pilot.engage()
-    vessel.auto_pilot.reference_frame = vessel.orbital_reference_frame
-    vessel.auto_pilot.target_direction = (0.0, 1.0, 0.0)  # Point pro-grade
+	# Get current phase angle
+	phaseAngle = 5040  # Random default value
+	vessel.control.rcs = True
+	vessel.auto_pilot.engage()
+	vessel.auto_pilot.reference_frame = vessel.orbital_reference_frame
+	vessel.auto_pilot.target_direction = (0.0, 1.0, 0.0)  # Point pro-grade
+	vessel.auto_pilot.wait()
 
-    angleDec = False  # Whether or not phase angle is decreasing; used to make sure mun is ahead of vessel
-    prevPhase = 0
-    while abs(phaseAngle - optimalPhaseAngle) > 1 or not angleDec:
-        bodyRadius = celestial_body.orbit.radius
-        vesselRadius = vessel.orbit.radius
+	angleDec = False  # Whether or not phase angle is decreasing; used to make sure mun is ahead of vessel
+	prevPhase = 0
+	while abs(phaseAngle - optimalPhaseAngle) > 1 or not angleDec:
+		bodyRadius = celestial_body.orbit.radius
+		vesselRadius = vessel.orbit.radius
 
-        time.sleep(1)
+		time.sleep(1)
 
-        bodyPos = celestial_body.orbit.position_at(conn.space_center.ut,
-                                                   celestial_body.reference_frame)
-        vesselPos = vessel.orbit.position_at(conn.space_center.ut, celestial_body.reference_frame)
+		bodyPos = celestial_body.orbit.position_at(conn.space_center.ut,
+												   celestial_body.reference_frame)
+		vesselPos = vessel.orbit.position_at(conn.space_center.ut, celestial_body.reference_frame)
 
-        bodyVesselDistance = ((bodyPos[0] - vesselPos[0]) ** 2 + (bodyPos[1] - vesselPos[1]) ** 2 + (
-                bodyPos[2] - vesselPos[2]) ** 2) ** (1 / 2)
+		bodyVesselDistance = ((bodyPos[0] - vesselPos[0]) ** 2 + (bodyPos[1] - vesselPos[1]) ** 2 + (
+				bodyPos[2] - vesselPos[2]) ** 2) ** (1 / 2)
 
-        try:
-            phaseAngle = math.acos(
-                (bodyRadius ** 2 + vesselRadius ** 2 - bodyVesselDistance ** 2) / (2 * bodyRadius * vesselRadius))
-        except:
-            print("Domain error! Cannot calculate. Standby...")
-            continue  # Domain error
-        phaseAngle = phaseAngle * 180 / math.pi
+		try:
+			phaseAngle = math.acos(
+				(bodyRadius ** 2 + vesselRadius ** 2 - bodyVesselDistance ** 2) / (2 * bodyRadius * vesselRadius))
+		except:
+			print("Domain error! Cannot calculate. Standby...")
+			continue  # Domain error
+		phaseAngle = phaseAngle * 180 / math.pi
 
-        if prevPhase - phaseAngle > 0:
-            angleDec = True
-            if abs(phaseAngle - optimalPhaseAngle) > 20:
-                conn.space_center.rails_warp_factor = 2
-            else:
-                conn.space_center.rails_warp_factor = 0
-        else:
-            angleDec = False
-            conn.space_center.rails_warp_factor = 4
+		if prevPhase - phaseAngle > 0:
+			angleDec = True
+			if abs(phaseAngle - optimalPhaseAngle) > 18:
+				conn.space_center.rails_warp_factor = 4
+			else:
+				conn.space_center.rails_warp_factor = 0
+		else:
+			angleDec = False
+			conn.space_center.rails_warp_factor = 4
 
-        prevPhase = phaseAngle
+		prevPhase = phaseAngle
 
-        print("Phase:", phaseAngle)
+		print("Phase:", phaseAngle)
 
-    # Use vis-viva to calculate deltaV required to raise orbit to that of the moon
-    mu = vessel.orbit.body.gravitational_parameter  # Get gravitation parameter (mu) for Kerbin
-    r = vessel.orbit.radius
-    a = vessel.orbit.semi_major_axis
+	# Use vis-viva to calculate deltaV required to raise orbit to that of the moon
+	mu = vessel.orbit.body.gravitational_parameter  # Get gravitation parameter (mu) for Kerbin
+	r = vessel.orbit.radius
+	a = vessel.orbit.semi_major_axis
 
-    v1 = math.sqrt(mu * ((2 / r) - (1 / a)))
+	v1 = math.sqrt(mu * ((2 / r) - (1 / a)))
 
-    a = (celestial_body.orbit.radius + vessel.orbit.radius) / 2
+	a = (celestial_body.orbit.radius + vessel.orbit.radius) / 2
 
-    v2 = math.sqrt(mu * ((2 / r) - (1 / a)))
+	v2 = math.sqrt(mu * ((2 / r) - (1 / a)))
 
-    delta_v = v2 - v1
-    print("Maneuver Now With DeltaV:", delta_v)
+	delta_v = v2 - v1
+	print("Maneuver Now With DeltaV:", delta_v)
 
-    actual_delta_v = 0
-    vessel.control.throttle = 1.0
-    while (delta_v > actual_delta_v):  # Complete maneuver node with <= 2% inaccuracy
-        time.sleep(0.15)
-        r = vessel.orbit.radius
-        a = vessel.orbit.semi_major_axis
-        actual_delta_v = (mu * ((2 / r) - (1 / a))) ** (1 / 2) - v1
-        print("DeltaV so far: ", actual_delta_v, "out of needed", delta_v)
-    vessel.control.throttle = 0
-    vessel.auto_pilot.disengage()
+	actual_delta_v = 0
+	vessel.control.throttle = 1.0
+	while (delta_v > actual_delta_v):
+		time.sleep(0.15)
+		r = vessel.orbit.radius
+		a = vessel.orbit.semi_major_axis
+		actual_delta_v = (mu * ((2 / r) - (1 / a))) ** (1 / 2) - v1
+		print("DeltaV so far: ", actual_delta_v, "out of needed", delta_v)
+	vessel.control.throttle = 0
+	vessel.auto_pilot.disengage()
+	print("Burn complete")
+	cir_moon()
 
 
 def cir_moon():
-    vessel.auto_pilot.engage()
-    vessel.auto_pilot.target_direction = (0.0, -1.0, 0.0)  # Point retro-grade surface
-    print(periapsis())
-    vessel.auto_pilot.wait()  # Wait until pointing retro-grade
-    time_to_warp = vessel.orbit.time_to_periapsis
-    conn.space_center.warp_to(ut() + time_to_warp - 30)  # 30 seconds from periapsis
-    vessel.auto_pilot.wait()
-    print("Fire engine...")
+	conn.space_center.warp_to(ut() + vessel.orbit.time_to_soi_change + vessel.orbit.next_orbit.time_to_periapsis - 120)
+	print('Planning Munar circularisation burn')
+	mu = vessel.orbit.body.gravitational_parameter
+	r = vessel.orbit.periapsis
+	a1 = vessel.orbit.semi_major_axis
+	a2 = r
+	v1 = math.sqrt(mu * ((2. / r) - (1. / a1)))
+	v2 = math.sqrt(mu * ((2. / r) - (1. / a2)))
+	delta_v = v2 - v1
+	nodeTime = ut() + vessel.orbit.time_to_periapsis
+	node = vessel.control.add_node(nodeTime, prograde=delta_v)
 
+	# Calculate burn time (using rocket equation)
+	F = vessel.available_thrust
+	Isp = vessel.specific_impulse * vessel.orbit.body.surface_gravity
+	m0 = vessel.mass
+	m1 = m0 / math.exp(delta_v / Isp)
+	flow_rate = F / Isp
+	burn_time = abs((m0 - m1) / flow_rate)
+	# Orientate ship
+	print('Orientating ship for Munar circularisation burn')
+	vessel.control.rcs = True
+	vessel.auto_pilot.engage()
+	vessel.auto_pilot.reference_frame = node.reference_frame
+	vessel.auto_pilot.target_direction = (0, 1, 0)
+	vessel.auto_pilot.wait()
+
+	# Wait until burn
+	print('Waiting until Munar circularisation burn')
+	burn_ut = nodeTime - (burn_time / 2.)
+	lead_time = 5
+	conn.space_center.warp_to(burn_ut - lead_time)
+	# Execute burn
+	print('Ready to execute burn')
+	time_to_periapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_periapsis')
+	while time_to_periapsis() - (burn_time / 2.) > 0:
+		pass
+	print('Executing burn')
+	vessel.control.throttle = 1.0
+	time.sleep(burn_time - 10)
+	print('Fine tuning')
+	vessel.control.throttle = 0.05
+	remaining_burn = conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+	while remaining_burn()[1] > 10.0:
+		pass
+	vessel.control.throttle = 0.0
+	node.remove()
+	lower_mun_orbit()
+
+def lower_mun_orbit():
+	print("Lowering to 30,000 metres")
+	vessel.control.rcs = True
+	vessel.auto_pilot.engage()
+	set_periapsis(30000, True)
+	circularize_burn_periapsis(True)
 
 def deorbit():
-    set_periapsis(0)
-    vessel.control.throttle = 0.1
-    time.sleep(0.5)
-    vessel.control.throttle = 0.0
+	set_periapsis(0)
+	vessel.control.throttle = 0.1
+	time.sleep(0.5)
+	vessel.control.throttle = 0.0
 
 
 def land_on_mun():
-    deorbit()
+	deorbit()
 
 prelaunch()
 
@@ -350,14 +443,16 @@ def on_message(ws, message):
 		set_apoapsis(int(message.split(",")[1]))
 	elif (command == "setperiapsis"):
 		set_periapsis(int(message.split(",")[1]))
+	elif (command == "muntransfer"):
+		lower_mun_orbit()
 	elif (command == "execute069"):
-		vessel.control.throttle = 1
+		vessel.control.throttle = 0.3
 		vessel.control.rcs = True
 		vessel.control.sas = False
 		vessel.auto_pilot.engage()
 		vessel.auto_pilot.target_pitch_and_heading(90, 270)
 		stage()
-		time.sleep(0.25)
+		time.sleep(1)
 		stage()
 		vessel.control.throttle = 0
 		vessel.auto_pilot.target_pitch_and_heading(0, 270)
@@ -365,6 +460,8 @@ def on_message(ws, message):
 			if (vessel.flight().pitch <= 5.0):
 				break
 		vessel.control.throttle = 1
+		time.sleep(3.25)
+		vessel.control.toggle_action_group(1)
 
 def on_open(ws):
 	print("Connected to server!")
