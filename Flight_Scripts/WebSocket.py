@@ -460,7 +460,7 @@ def on_message(ws, message):
 			if (vessel.flight().pitch <= 5.0):
 				break
 		vessel.control.throttle = 1
-		time.sleep(3.25)
+		time.sleep(3.2)
 		vessel.control.toggle_action_group(1)
 
 def on_open(ws):
@@ -469,5 +469,6 @@ def on_open(ws):
 def on_close(ws):
 	print("Server connection lost!\nReconnecting...")
 
+mun_transfer()
 ws = websocket.WebSocketApp("ws://35.242.157.185/", on_message = on_message, on_close = on_close, on_open = on_open)
 ws.run_forever()
